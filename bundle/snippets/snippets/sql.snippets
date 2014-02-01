@@ -24,3 +24,263 @@ snippet seq
 	create sequence ${1:name} start with ${2:1} increment by ${3:1} minvalue ${0:1};
 snippet s*
 	select * from ${0:table}
+snippet stats
+	begin
+		dbms_stats.gather_table_stats(
+			 '${1:schema}'
+			,'${2:table_name}'
+			,cascade=>true
+			,estimate_percent=>dbms_stats.auto_sample_size
+			,degree=>32);
+	end;
+snippet declare
+	declare
+		${1}
+	begin
+		${2}
+	end;
+
+snippet if
+	if ${1} then
+		${2}
+	else
+		${3}
+	end if;
+
+snippet pkgrptdicx
+	select /*+ PARALLEL(t,32) */
+				t.*
+	from ${1:tabprefix}_ch t
+	-- from $1_ch_eh_ced t
+	-- from $1_eh h
+	-- from $1_upg h
+	-- from $1_churn h
+	-- from $1_jd h
+	where 
+	campaign_code = '${2}'
+	and 
+	cell_code = '${3}'
+	and
+	customer_id = '${4}'
+	-- and
+	-- glb_cust_id = '$4'
+	-- and 
+	-- crm_glb_cust_id like  '$4-%'
+	;
+
+	select /*+ PARALLEL(jd,32) 
+						 PARALLEL(t,32) */
+				 jd.*
+				,t.*
+	 from a_crm.crm_job_details jd
+	 left outer join a_crm.crm_et_tracking t on jd.job_id = t.sendid
+																					and jd.crm_glb_cust_id = t.subscriberkey
+	where campaign_code = '$2'
+	 and cell_code = '$3'
+	 and customer_id = '$4'
+	;
+
+snippet pkgrpt
+	begin
+		pkg_rpt_tpl.master_sending('${1:table_prefix}', q'[where campaign_code like '$1%']');
+		dbms_stats.gather_table_stats(
+			'vberube'
+			,'$1_CH'
+			,cascade=>true
+			,estimate_percent=>dbms_stats.auto_sample_size
+			,degree=>32);
+		pkg_rpt_tpl.job_details('$1', q'[where campaign_code like '$1%']');
+		dbms_stats.gather_table_stats(
+			 'vberube'
+			,'$1_JD'
+			,cascade=>true
+			,estimate_percent=>dbms_stats.auto_sample_size
+			,degree=>32);
+		pkg_rpt_tpl.et_tracking('$1', q'[where campaign_code like '$1%']');
+		dbms_stats.gather_table_stats(
+			 'vberube'
+			,'$1_EH'
+			,cascade=>true
+			,estimate_percent=>dbms_stats.auto_sample_size
+			,degree=>32);
+		pkg_rpt_tpl.start_dates('$1');
+		dbms_stats.gather_table_stats(
+			 'vberube'
+			,'$1_CSD'
+			,cascade=>true
+			,estimate_percent=>dbms_stats.auto_sample_size
+			,degree=>32);
+		pkg_rpt_tpl.start_dates_ctrl('$1');
+		dbms_stats.gather_table_stats(
+			 'vberube'
+			,'$1_CSD_CTRL'
+			,cascade=>true
+			,estimate_percent=>dbms_stats.auto_sample_size
+			,degree=>32);
+		pkg_rpt_tpl.master_tracking('$1');
+		dbms_stats.gather_table_stats(
+			 'vberube'
+			,'$1_CH_EH'
+			,cascade=>true
+			,estimate_percent=>dbms_stats.auto_sample_size
+			,degree=>32);
+		pkg_rpt_tpl.master_tracking_ced('$1');
+		dbms_stats.gather_table_stats(
+			 'vberube'
+			,'$1_CH_EH_CED'
+			,cascade=>true
+			,estimate_percent=>dbms_stats.auto_sample_size
+			,degree=>32);
+		dbms_mview.refresh(
+			list => 'mv_rpt_bb10_upg'
+			,method => 'c'
+			,atomic_refresh => false);
+			pkg_rpt_tpl.upgrades('$1');
+		dbms_stats.gather_table_stats(
+			 'vberube'
+			,'$1_UPG'
+			,cascade=>true
+			,estimate_percent=>dbms_stats.auto_sample_size
+			,degree=>32);
+		pkg_rpt_tpl.churn('$1');
+		dbms_stats.gather_table_stats(
+			'vberube'
+			,'$1_churn'
+			,cascade=>true
+			,estimate_percent=>dbms_stats.auto_sample_size
+			,degree=>32);
+		pkg_rpt_tpl.final('$1');
+		dbms_stats.gather_table_stats(
+			'vberube'
+			,'$1_final'
+			,cascade=>true
+			,estimate_percent=>dbms_stats.auto_sample_size
+			,degree=>32);
+		pkg_rpt_tpl.email_summary_report(1, '$1');
+	end;
+
+snippet ms
+	a_crm.crm_master_sending
+snippet jd
+	a_crm.crm_job_details
+snippet et
+	a_crm.crm_et_tracking
+snippet /*
+	/* ${1} */
+snippet /**
+	/*
+	 *${1} 
+	 */
+snippet /*+
+	/*+ ${1} */
+snippet selcnt
+	select /*+ PARALLEL($2,32) */
+				count(*)
+		from ${1:table_name} ${2:tab_prefix}
+
+snippet ct
+	create table ${1:table_name}
+			compress for query high
+			parallel
+			nologging
+	as
+snippet getdupes
+	with dupes as (
+		select /*+ PARALLEL(h,32) */
+					h.campaign_code
+				 ,h.cell_code
+				 ,h.e_email
+				 ,count(*)
+			from ${1:table} h
+			where h.campaign_code like '${2:prg}%'
+	group by 
+				 h.campaign_code
+				,h.cell_code
+				,h.e_email
+	having count(*)>1
+	)
+		select /*+ PARALLEL(h,32) */
+						row_number() over (partition by h.campaign_code ,h.cell_code ,h.e_email order by h.campaign_code ,h.cell_code ,h.e_email) row_num
+					 ,h.*
+			from $1 h
+			inner join dupes d on h.campaign_code    = d.campaign_code
+												and h.cell_code        = d.cell_code
+												and h.e_email          = d.e_email
+
+snippet	selms
+	select /*+ PARALLEL(ms,32) */
+				 ms.campaign_code
+				,ms.cell_code
+				,ms.control_group
+				,ms.*
+	 from a_crm.crm_master_sending ms
+	 where campaign_code like '${1:predicate}%'
+
+snippet	seljd
+	select /*+ PARALLEL(jd,32) */
+				 jd.campaign_code
+				,jd.cell_code
+				,jd.*
+	 from a_crm.crm_job_details jd
+	 where campaign_code like '${1:predicate}'
+
+snippet selt
+	select /*+ PARALLEL(t,32) */
+				 t.sendid
+				,t.subsriberkey
+				,t.*
+	 from a_crm.crm_et_tracking t
+	 where sendid = ${1:jobid}
+		and subscriberkey = '${2:subscriberkey}'
+		and eventtype = 'Sent'
+	;
+
+snippet	seljdt
+	select /*+ PARALLEL(jd,32) 
+						 PARALLEL(t,32) */
+				 jd.*
+				,t.*
+	 from a_crm.crm_job_details jd
+	 left outer join a_crm.crm_et_tracking t on jd.job_id = t.sendid
+																					and jd.crm_glb_cust_id = t.subscriberkey
+	 where jd.campaign_code like '${1:predicate}%'
+			and jd.crm_glb_cust_id like ''
+			and t.eventtype = 'Sent'
+	;
+
+snippet sel
+	select /*+ PARALLEL(${2:table_prefix},32) */
+				 $2.
+				,$2.
+				,$2.
+		from ${1:table_name} $2
+
+snippet hintpar
+	/*+ PARALLEL(${1:table_prefix},32) */
+snippet hintapp
+	/*+ APPEND */
+snippet dual
+	select $2
+				,$4
+	from 
+	(
+	 select ${1:field1} as ${2:name1}, ${3:field2} as ${4:name2} from dual union all
+	 select $1 as $2, $3 as $4 from dual union all
+	 select $1 as $2, $3 as $4 from dual union all
+	 select $1 as $2, $3 as $4 from dual union all
+	 select $1 as $2, $3 as $4 from dual 
+	)
+	;
+
+snippet crmpred
+	and campaign_code = ''
+	and cell_code = ''
+	and control_group = ''
+	and customer_id = ''
+	and email_address = ''
+	and e_email = ''
+	and crm_glb_cust_id = ''
+
+snippet insert
+	insert /*+ APPEND */
+
