@@ -1,12 +1,34 @@
 execute pathogen#infect()
+syntax on
+filetype plugin indent on
 
-set nocompatible
-set number
-set ts=2 sts=2 sw=2 expandtab
+" nocompatible switch for full Vim, no Vi
+" ruler adds line,col position
+" number adds inline line numbers
+" showmode displays mode (visual, normal, insert)
+" showcmd displays partial command
+set nocompatible ruler number showmode showcmd
+" tabstop: Number of spaces that a <Tab> in the file counts for
+" softtabstop: Number of spaces that a <Tab> counts while editing
+" shiftwidth: Number of spaces to use for reach step of (auto) indent 
+" expandtab: 
+set tabstop=2 
+set softtabstop=2 
+set shiftwidth=2 
+set expandtab
+set nowrap
 source $VIMRUNTIME/vimrc_example.vim
 source $VIMRUNTIME/mswin.vim
 behave mswin
+" Resolves an issue with Vim creating temp files for diff
 let $TMP="c:/tmp"
+
+" DBext Profile
+let g:dbext_default_profile_ORA = 'type=ORA:user=vberube:passwd=r1mr1mr1m:srvname=PCINF'
+let g:dbext_default_profile = 'ORA'
+
+"add nohlsearch to the refresh screen key CTRL+L
+nnoremap <silent> <C-l> :<C-u>nohlsearch<CR><C-l>
 
 set diffexpr=MyDiff()
 function MyDiff()
