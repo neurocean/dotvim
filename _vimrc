@@ -17,6 +17,9 @@ set softtabstop=2
 set shiftwidth=2 
 set expandtab
 set nowrap
+" smartcase if search str is mixed case = case sensitivity
+"						if search str all lower case = non-sensitive search
+set ignorecase smartcase
 source $VIMRUNTIME/vimrc_example.vim
 source $VIMRUNTIME/mswin.vim
 behave mswin
