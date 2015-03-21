@@ -49,6 +49,77 @@ snippet if
 		${3}
 	end if;
 
+snippet crmqa
+	-- ################################################################################
+	-- # PROGRAM <--> MASTER CONTROL Contamination Verification                       #
+	-- ################################################################################
+	select /*+ PARALLEL(t,32) */
+		   count(*)
+	  from ${1:final_table} t
+	  where t.control_group = 'PROGRAM'
+		and exists (
+		select /*+ PARALLEL(ms,32) */
+			  0 
+		 from a_crm.crm_master_sending ms
+		 where campaign_code like '${2}%'
+		   and control_group = 'MASTER CONTROL'
+		   and ms.crm_e_email = t.crm_e_email
+		)
+	
+	-- ################################################################################
+	-- # PROGRAM <--> CONTROL Contamination Verification							  #
+	-- ################################################################################
+	select /*+ PARALLEL(t,32) */
+		   count(*)
+	  from $1 t
+	  where t.control_group = 'PROGRAM'
+		and exists (
+		select /*+ PARALLEL(ms,32) */
+			  0 
+		 from a_crm.crm_master_sending ms
+		 where campaign_code like '$2%'
+		   and control_group = 'CONTROL'
+		   and ms.crm_e_email = t.crm_e_email
+		)
+
+	
+	-- ################################################################################
+	-- # VERIFY THERE ARE NO INVALID EMAIL ADDRESSES                                  #
+	-- ################################################################################
+	SELECT COUNT(*)
+	FROM ${3:staging_table} A
+	WHERE A.EMAIL_ADDRESS IN (SELECT IE.E_EMAIL
+								FROM A_CI.SAT_EMAIL_INVALID_FIXED IE
+							 )
+
+	
+	-- ################################################################################
+	-- # BLACKLIST DOMAIN CHECK                                                       #
+	-- ################################################################################
+	SELECT COUNT(*) 
+	FROM $3 A
+	WHERE UPPER(SUBSTR(R_MASK.ENCRYPTION_PKG.DECRYPT(A.EMAIL_ADDRESS),
+					   INSTR(R_MASK.ENCRYPTION_PKG.DECRYPT(A.EMAIL_ADDRESS),
+							 '@'
+							) + 1
+					  )
+			   ) IN (SELECT DB.DOMAIN
+					   FROM S_DBM.V_DOMAIN_BLACKLIST DB
+					)
+
+
+	-- ################################################################################
+	-- # DNC Check                                                                    #
+	-- ################################################################################
+	SELECT COUNT(*)
+	FROM $3 S
+	WHERE EXISTS (SELECT 1 
+					FROM A_CI.SAT_EMAIL_DNC DNC 
+					WHERE DNC.E_EMAIL = S.EMAIL_ADDRESS
+				 )
+				 
+
+
 snippet pkgrptdicx
 	select /*+ PARALLEL(t,32) */
 				t.*
@@ -167,6 +238,11 @@ snippet jd
 	a_crm.crm_job_details
 snippet et
 	a_crm.crm_et_tracking
+snippet spool
+	BEGIN
+		S_DBM.PACK_SPOOLING_FILES.Proc_Main;
+	END;
+	
 snippet /*
 	/* ${1} */
 snippet /**
@@ -179,7 +255,11 @@ snippet selcnt
 	select /*+ PARALLEL($2,32) */
 				count(*)
 		from ${1:table_name} ${2:tab_prefix}
-
+snippet selcntw
+	select /*+ PARALLEL($2,32) */
+				count(*)
+		from ${1:table_name} ${2:tab_prefix}
+		where ${3:predicate}
 snippet ct
 	create table ${1:table_name}
 			compress for query high
@@ -218,6 +298,120 @@ snippet	selms
 	 from a_crm.crm_master_sending ms
 	 where campaign_code like '${1:predicate}%'
 
+snippet	selld
+	select /*+ PARALLEL(ld,32) */
+		  count(*)
+	 from s_dtc.live_driver_email ld
+
+snippet live_driver
+	s_dtc.live_driver_email
+snippet ldscrub
+	  --Deduplicate by email
+	   DELETE /*+ PARALLEL(A,32) */
+					 FROM ${1:table_name} A
+					 WHERE RowId > (SELECT /*+ PARALLEL(B,32) */ Min(RowId)
+									  FROM ${1:table_name} B
+									  WHERE A.CRM_E_EMAIL = B.CRM_E_EMAIL
+								   );
+	  --DNC Scrub
+	   DELETE /* PARALLEL(A,32) */
+				   FROM ${1:table_name} A
+				   WHERE EXISTS (SELECT /*+ PARALLEL(DNC,32) */ 1
+							   FROM A_CI.SAT_EMAIL_DNC DNC
+							   WHERE DNC.E_EMAIL = A.E_EMAIL
+							);
+	  --Blacklist Domain Scrub
+	   DELETE /* PARALLEL(A,32) */
+				   FROM ${1:table_name} A
+				   WHERE EXISTS (SELECT /*+ PARALLEL(DB,32) */ 1
+							   FROM S_DBM.DOMAIN_BLACKLIST DB
+							   WHERE DB.DOMAIN = A.EMAIL_DOMAIN
+							);
+	  --Invalid Emails Scrub
+	   DELETE /* PARALLEL(A,32) */
+				   FROM ${1:table_name} A
+				   WHERE EXISTS (SELECT /*+ PARALLEL(IE,32) */ 1
+							   FROM A_CI.SAT_EMAIL_INVALID_FIXED IE
+							   WHERE IE.E_EMAIL = A.E_EMAIL
+							);
+	  --Hard Bounce Scrub
+	   DELETE /* PARALLEL(A,32) */
+				   FROM ${1:table_name} A
+				   WHERE EXISTS (SELECT /*+ PARALLEL(HB,32) */ 1
+							   FROM A_CRM.CRM_HARDBOUNCE HB
+							   WHERE HB.CRM_E_EMAIL = A.CRM_E_EMAIL
+							);
+snippet tabld
+	s_dtc.live_driver_email ld
+snippet tabbbm
+	s_bbm.bbm_mp_snapshot2 b
+snippet tabeh
+	a_crm.crm_et_tracking t
+snippet tabch
+	a_crm.crm_master_sending ms
+snippet tabjd
+	a_crm.job_details jd
+snippet tabgc
+	a_crm.crm_global_customer gc
+snippet tabt
+	a_crm.crm_et_tracking t
+snippet ldos
+	substr(dev_app_ver_major, 1, instr(dev_app_ver_major, '.')+1)
+snippet ldosplat
+	  ,case
+		 when regexp_like(dev_app_ver, '^1[0-5]{1}\.') then 'BB10' 
+		 when regexp_like(dev_app_ver, '^[4567]{1}\.') then 'BBOS' 
+		 else 'N/A'
+	   end os_platform
+snippet ldbisbes
+	case
+	  when regexp_like(dev_app_ver, '^1[0-5]{1}\.') and bis_bes = 'BES' then 'BES'
+	  when regexp_like(dev_app_ver, '^1[0-5]{1}\.') and bis_bes = 'BIS' then 'BIS'
+	  when regexp_like(dev_app_ver, '^[4-7]{1}\.') and bes_access = 'N' then 'BIS' 
+	  when regexp_like(dev_app_ver, '^[4-7]{1}\.') and bes_access = 'Y' then 'BES' 
+	  else 'ERR'
+	end
+snippet ldbisbes_sqlserver
+	,case
+		when os like '1[0-5][.]%' and bis_bes = 'BES' then 'BES'
+		when os like '1[0-5][.]%' and bis_bes = 'BIS' then 'BIS'
+		when os like '[4567][.]%' and bes_access = 'N' then 'BIS' 
+		when os like '[4567][.]%' and bes_access = 'Y' then 'BES' 
+		else 'ERR'
+	end bisbes
+snippet ldten
+	floor(pin_tenure/30)
+	floor(months_between(sysdate, trunc(sysdate, 'IW') - pin_tenure))
+snippet ldten_sqlserver
+	,datediff
+	 (  
+		mm
+	   ,dateadd(dd, -1*pin_tenure, dateadd(dd, 2 - datepart(dw, getdate()), getdate()))
+	   ,getdate()
+	 )
+	 - case when datepart(day, dateadd(dd, -1*pin_tenure, dateadd(dd, 2 - datepart(dw, getdate()), getdate()))) > datepart(day, getdate()) then 1 else 0 end 
+	 as device_tenure
+snippet lddomain
+	--UNENCRYPTED EMAIL
+	  UPPER(SUBSTR(${1:tab}, INSTR($1, '@') + 1)) domain
+	--ENCRYPTED EMAIL
+	  UPPER(SUBSTR(R_MASK.ENCRYPTION_PKG.DECRYPT($1),
+										 INSTR(R_MASK.ENCRYPTION_PKG.DECRYPT($1),
+											   '@'
+											  ) + 1
+										)
+								 ) domain
+snippet ldprepost
+	,case when pre.sap_serv_prd is not null then 'PRE' else 'POST' end as pre_post_paid
+	left outer join (select distinct s.sap_serv_prd
+					 from   s_pprov.glb_services s
+							join s_pprov.glb_sim_services ss
+							   on s.sap_serv_prd = ss.sap_serv_prd
+					where   upper (s.serv_name) like '%PRE%PAID%') pre
+					 on ld.finl_sap_serv_prd = pre.sap_serv_prd
+snippet ldran
+	,ROW_NUMBER() OVER (PARTITION BY CELL_CODE ORDER BY ROUND(DBMS_RANDOM.VALUE(1,10000000))) REC_NUM
+	ORDER BY ROUND(DBMS_RANDOM.VALUE(1,10000000))
 snippet	seljd
 	select /*+ PARALLEL(jd,32) */
 				 jd.campaign_code
@@ -226,10 +420,24 @@ snippet	seljd
 	 from a_crm.crm_job_details jd
 	 where campaign_code like '${1:predicate}'
 
+snippet dropdeltabs
+	declare
+		  cursor c1 is select * from all_Tables where owner = 'VBERUBE' and table_name like 'DEL%';
+		  r1 c1%ROWTYPE;
+	begin
+		 open c1;
+		  loop
+				fetch c1 into r1;
+				exit when c1%notfound;
+				execute immediate 'drop table '||r1.owner||'.'||r1.table_name;
+	            dbms_output.put_line('drop table '||r1.owner||'.'||r1.table_name);
+		  end loop;
+	end;
+	
 snippet selt
 	select /*+ PARALLEL(t,32) */
 				 t.sendid
-				,t.subsriberkey
+				,t.subscriberkey
 				,t.*
 	 from a_crm.crm_et_tracking t
 	 where sendid = ${1:jobid}
@@ -252,13 +460,22 @@ snippet	seljdt
 
 snippet sel
 	select /*+ PARALLEL(${2:table_prefix},32) */
-				 $2.
-				,$2.
-				,$2.
+				 $2.*
 		from ${1:table_name} $2
-
+snippet selw
+	  select /*+ PARALLEL(${2:table_prefix},32) */
+			 $2.*
+	    from ${1:table_name} $2
+	   where ${3:predicate}
 snippet hintpar
-	/*+ PARALLEL(${1:table_prefix},32) */
+	/*+ PARALLEL(${1:table_prefix},32) */ 
+snippet hintpar2
+	/*+ PARALLEL(${1:table_prefix},32) 
+	    PARALLEL(${2:table_prefix},32) */ 
+snippet hintpar3
+	/*+ PARALLEL(${1:table_prefix},32) 
+	    PARALLEL(${2:table_prefix},32)
+		PARALLEL(${3:table_prefix},32) */ 
 snippet hintapp
 	/*+ APPEND */
 snippet dual
@@ -284,592 +501,121 @@ snippet crmpred
 	and crm_glb_cust_id = ''
 
 snippet insert
-	insert /*+ APPEND */
-
-snippet tpl
-			/*************** CAMPAIGN TEMPLATE EMAIL ***************\
-			\*******************************************************/
-
-			/****************** 1.0 TEMPLATE SETUP *********************************************************************************************************************\
-			|   STEP 1 FIND AND REPLACE ITEMS BELOW
-			|   
-			|   REPLACE: @TABLE_NAME     (SET TO YOUR TABLE NAME) (Up to 17 Chars - Because the Template will create other temp tables by adding Suffix to the table name)
-			|   REPLACE: @FILETYPE                 (THREE CHARACTER VALUE, DTC, B2B, DIG)
-			|   REPLACE: @PROGRAMVALUE                 (THREE CHARACTER VALUE
-			|                                (EG: NEW, UPG, THY (Thank You), BLF (Black Friday), CHS (Churn Survey), MSM)
-			|   REPLACE: @W1                   (WAVE, 1 DIGIT INTEGER VALUE)
-			|   REPLACE: @CAMPAIGNTYPE                   (EG: Campaign Type(M -Main , O -Overlap , T - Trigger, S - Supplemental, X- Overlay Campaign)
-			|   REPLACE: @CHANNEL                  (EG: Email (EM) / Pin Blast (PB) / Telemarketing (TM) / Direct Mail Marketing (DM) / Telemarketing and Direct Mail Marketing (TD)
-			|                                 / Telemarketing and Email (TE) / Direct Mail Marketing and EMAIL (DE) / Telemarketing and Direct Mail Marketing and Email (AL)
-			|                                 / Direct Mail & Automated Telemarketing (DA) / Automated Telemarketing (AT) / Universe (UA) / Random (RD)
-			|                                 / TM & Automated Telemarketing (TA) / @CHANNEL (CH) / Control (CO) / Premise (PR) / Email & Automated Telemarketing (EA) /
-			|   REPLACE: @REGIONVALUE                  (NA / EU / MU for multiple Regions)
-			|   REPLACE: @COUNTRYCODE                  (US / CA / UK / MU for multiple Countries)
-			|   REPLACE: @LANGUAGECODE                  (EN / FR / MU for multiple Lanuguages)
-			|   REPLACE: @DATEVALUE              CAMPAIGN DEPLOYMENT DATE ('MMDDYY')
-			|   REPLACE: @STARTDATEVALUE             CAMPAIGN START DATE ('MMDDYY')
-			\***********************************************************************************************************************************************************/
-
-
-			-- Matrix: mmmmmmmmmmmmmmmmmm.xls
-			-- Responsible: 
-			-- Staging Tables: @TABLE_NAME_STG
-			--                 @TABLE_NAME_STG_SPLIT
-			-- Final Data Table: @FILETYPE_@PROGRAMVALUE_@REGIONVALUE_@COUNTRYCODE_@LANGUAGECODE_@DATEVALUE_F
-
-
-			/****************** 1.1 CREATE WORKING TABLE ************\
-			|            CREATES <@TABLE_NAME_STG>             |
-			\********************************************************/
-
-			  BEGIN
-				S_DBM.SP_CREATE_WORKFILES_02 ('@TABLE_NAME_STG');
-			  END;
-
-
-			/***************** 2.0 POPULATE WORKING TABLE **********\
-			|                  MODIFY BELOW QUERY BY ADJUSTING:     |
-			|               - CUSTOM1-10 FIELDS                     |
-			|               - CONDITIONS IN WHERE CLAUSE            |
-			\*******************************************************/
-		
-		  --TRUNCATE TABLE IF RE-WORK IS REQUIRED
-		  TRUNCATE TABLE @TABLE_NAME_STG     
-
-
-		  INSERT /*+append*/  INTO @TABLE_NAME_STG
-			SELECT DISTINCT
-			  LD.GLB_CUST_ID                                         AS CustomerID,
-			  LD.E_EMAIL  /*MUST INSERT ENCRYPTED EMAIL*/            AS Email_Address,
-			  ''                                                     AS FirstName,     --Use only for personalized campaigns
-			  ''                                                     AS LastName,      --Use only for personalized campaigns
-			  'X' /* MAX 6 CHARACTERS (SHOULD NOT LEAVE NULL) */     AS Campaign_Code, --This value will be included as the BATCH VALUE part of the final Campaign_Code
-			  'X' /* MAX 5 CHARACTERS (SHOULD NOT LEAVE NULL) */     AS Cell_Code,     --This value will be included as the BATCH VALUE part of the final Cell_Code
-			  ''                                                     AS Promo_Code,
-			  ''                                                     AS CPID,
-			  LD.MKT_COUNTRY                                         AS Country,
-			  LD.MKT_LANGUAGE                                        AS Language,
-			  'BIS'                                                  AS Segment,
-			  'Consumer'                                             AS Audience,
-			  ''                                                     AS JobRole,
-			  ''                                                     AS Department,
-			  CASE 
-				WHEN LD.BRAND_NAME = 'N/A' 
-				  OR LD.BRAND_NAME IS NULL THEN 'OTHER' 
-				ELSE LD.BRAND_NAME  
-			  END                                                    AS Device_Category,
-			  LD.MODEL_NO_CLEAN                                      AS Device_Detail,
-			  LD.CUST_TENURE                                         AS Cust_Tenure,
-			  LD.DEV_TYPE_TENURE                                     AS Device_Tenure,
-			  LD.CARRIER                                             AS Carrier,
-			  LD.DEV_APP_VER_MAJOR                                   AS OS,
-			  'Promotional'                                          AS MessageType,
-			  LD.PERMISSION_TYPE                                     AS PermissionType,
-			  /*USE BELOW STATEMENT INSTEAD OF ABOVE LINE FOR PERMISSIONTYPE
-				IF BBCN / OL SUBSCRIPTION IS REQUIRED
-			  CASE 
-				WHEN BBCN.E_EMAIL IS NOT NULL 
-					 AND 
-					 LD.PERMISSION_TYPE = 'SERVICE' THEN 'SUBSCRIPTION'
-				ELSE LD.PERMISSION_TYPE
-			  END                                                    AS PermissionType,*/
-			  ''                                                     AS Industry,
-			  ''                                                     AS Vertical,
-			  'EM'                                                   AS Vehicle,      --'EM','PB','DM','SMS','TM'
-			  ''                                                     AS SubjectLine,
-			  ''                                                     AS Version,
-			  ''                                                     AS Custom1,
-			  ''                                                     AS Custom2, 
-			  ''                                                     AS Custom3,
-			  ''                                                     AS Custom4,
-			  ''                                                     AS Custom5,
-			  ''                                                     AS Custom6,
-			  S_DBM.SF_MARKETING_NAME(LD.BRAND_NAME,
-									  LD.MODEL_NO_CLEAN)             AS Custom7,
-			  ''                                                     AS Custom8,      --DATE FIELD
-			  ''                                                     AS Custom9,      --NUMBER FIELD
-			  S_DBM.SF_LANGUAGE_CODE(LD.MKT_COUNTRY,
-									 LD.MKT_LANGUAGE)                AS Custom10,     --NUMBER FIELD
-			  LD.MASTER_CONTROL                                      AS ControlGroup, --FOR BUILD ONLY; NOT IN FINAL FILE
-			  ROUND(DBMS_RANDOM.VALUE(1,10000000))                   AS RanNum,       --FOR BUILD ONLY; NOT IN FINAL FILE
-			  LD.DEVICE_ID                                           AS Device_ID,    --PIN
-			  LD.HIERARCHY_DT /*DATE MUST BE PRESENT IN THIS FIELD*/ AS Driver_Table
-		   
-			FROM S_DBM.LIVE_DRIVER LD --MASTER TABLE
-			/*--ONLY USE BELOW JOIN IF BBCN / OL SUBSCRIPTION IS REQUIRED IN CAMPAIGN
-			LEFT JOIN S_DBM.VW_BBCN_OL_SUBSCRIPTION BBCN
-			ON BBCN.E_EMAIL = LD.E_EMAIL*/
-	   
-			--ADDITIONAL REQUIRED JOINS--
-		   
-			WHERE  --EDIT SELECTION CRITERIA BELOW--
-			   
-				LD.EMAIL_FLAG = 1 -- Email Communication Channel
-				AND LD.MKT_COUNTRY IN ('CANADA', 'US', 'UK - to be addes currently as OTHER') 
-				AND LD.MKT_LANGUAGE = 'EN'
-				--EXCLUDE BUSINESS USERS
-				AND LD.HIERARCHY_BIS_BES = 'BIS' -- Exclude BES (Regarding to Suppressions / Exclusions column of the Excel sheet)
-				AND LD.BES_ACCESS = 'N'          -- Exclude BES (Regarding to Suppressions / Exclusions column of the Excel sheet)
-				--AND LD.BISE_ACCESS = 'Y'         -- Client has Email Access (As on the Campaign Excel sheet. If the Excel sheet does not mention anything about Email Access, by default it should be commented)
-				--AND LD.BISB_ACCESS = 'Y'         -- Client has Browsing Access (As on the Campaign Excel sheet. If the Excel sheet does not mention anything about Browsing Access, by default it should be commented)
-				AND LD.BESX_TRAFFIC_MB = 0       -- Exclude BESX (Regarding to Suppressions / Exclusions column of the Excel sheet)
-				--ELS - How long in months the Customer owns this Device (Exclude particular Customers regarding to Suppressions / Exclusions column of the Excel sheet)
-				AND (
-					(LD.DEV_TYPE_TENURE > 2 AND TO_NUMBER(LD.DEV_APP_VER_MAJOR) < 7)
-					OR
-					(LD.DEV_TYPE_TENURE > 1 AND TO_NUMBER(LD.DEV_APP_VER_MAJOR) >= 7)
-					)  
-				--PERMISSION
-				AND LD.PERMISSION_TYPE IN ('PERMISSION', 'SERVICE')  -- SET PERMISSION LEVEL HERE (Regarding to Permissions column of the Excel sheet)
-				/*--ONLY USE BELOW CONDITION INSTEAD OF THE CONDITION ABOVE IF BBCN / OL SUBSCRIPTION IS REQUIRED IN CAMPAIGN
-				--PERMISSION
-				AND CASE 
-					  WHEN BBCN.E_EMAIL IS NOT NULL 
-						   AND 
-						   LD.PERMISSION_TYPE = 'SERVICE' THEN 'SUBSCRIPTION'
-					  ELSE LD.PERMISSION_TYPE
-					END IN ('PERMISSION', 'SERVICE', 'SUBSCRIPTION')*/
-				--BIS FILTERS
-				AND CASE 
-					  WHEN LD.BES_ACCESS = 'N' AND LD.BISB_ACCESS = 'Y' AND LD.BIS_SOCIAL_ACCESS = 'N' AND LD.BISE_ACCESS = 'Y' THEN 'BIS'
-					  WHEN LD.BES_ACCESS = 'N' AND LD.BISB_ACCESS = 'N' AND LD.BIS_SOCIAL_ACCESS = 'N' AND LD.BISE_ACCESS = 'Y' THEN 'BISL'
-					  WHEN LD.BES_ACCESS = 'N' AND LD.BISB_ACCESS = 'N' AND LD.BIS_SOCIAL_ACCESS = 'N' AND LD.BISE_ACCESS = 'N' THEN 'BBM'
-					  WHEN LD.BIS_SOCIAL_ACCESS = 'Y' THEN 'SOC'
-					  ELSE 'OTHER'
-					END IN ('BIS', 'BISL', 'SOC', 'BBM', 'OTHER')  -- BISL = BIS Lite, SOC = BIS Social
-				--EXCLUDE NON_ENGAGERS
-				AND NOT EXISTS (SELECT 1
-								  FROM S_DBM.MV_NON_ENGAGERS_4 NE
-								  WHERE NE.E_EMAIL = LD.E_EMAIL
-							   );
-
-					
-			--INDICATE TOTAL COUNTS HERE: 
-	 
-			
-			COMMIT;
-			   
-			/********************* 3.0 DNC SCRUB / DEDUPE **************************\
-			| --REMOVES DNC RECORDS FROM THE WORKING TABLE                          |
-			|                --ALL - REMOVES ALL DNC RECORDS                        |
-			|                --ALL - REMOVES ONLY OFFER SPECIFIC DNC RECORDS        |
-			\***********************************************************************/
-				  
-				  --REMOVES DUPLICATE RECORDS FROM PROVIDED TABLE
-				  BEGIN 
-					-- Step 1: Deleting the duplicate records of the Customers with the Same Email Addresses but different Customer IDs
-					S_DBM.SP_DEDUPE_STG('@TABLE_NAME_STG');
-					-- Step 2: Deleting the duplicate records of the Customers with the Same Customer IDs but different Email Addresses
-					S_DBM.SP_DEDUPE_EMAIL_ADDRESS('@TABLE_NAME_STG');
-				  END;
-
-				  --NUMBER OF @TABLE_NAME_STG STAGING TABLE RECORDS AFTER REMOVING DUPLICATE RECORDS: 
-
-				  
-				  --DNC SCRUB
-				  --(When the Source of data is Live_Driver table, we do not need to run DNC_SCRUB Procedure (which Deletes DNC records) becasue the DNC records have already been
-				  -- excluded from the Live_Driver table. Unless the staging table data have been picked from Live_Driver table a while ago and now we want to be sure that the
-				  -- picked records have not been chagned to DNC)
-				  BEGIN
-					EXECUTE IMMEDIATE 'GRANT SELECT,DELETE ON MSM_BB_PRT_JUN_12_STG TO S_DBM';
-					S_DBM.SP_DNC_SCRUB_ND3 ('@TABLE_NAME_STG'
-										   ,'MKTRSCH OR DNC' --REMOVE DNC OR CONTACT WHO DOESN'T WANT TO RECEIVE MARKET RESEARCH
-										   ,'1 ='            --FIELD NAME IN STAGING TABLE = < > 
-										   ,'1'              --VALUE IN FIELD INDICATED ABOVE
-										   ,'Y / N'              --USE Y IF DATA IS NOT PULLED FROM DRIVER TABLE ONLY
-										   );
-				  END; 
-
-				  --NUMBER OF @TABLE_NAME_STG STAGING TABLE RECORDS AFTER DNC SCRUB: 
-
-
-			/********************* 3.3 INVALID DOMAINS SUPPRESION ******************\
-			|              --ALL - REMOVES THE ALL BALACK LIST DOMAIN RECORDS           |
-			\***********************************************************************/
-				  
-				 --REMOVES ALL BALACK LIST DOMAIN RECORDS
-				  BEGIN 
-					S_DBM.SP_DELETE_BLACK_LIST_DOMAINS('@TABLE_NAME_STG');
-				  END;
-
-				  --NUMBER OF @TABLE_NAME_STG STAGING TABLE RECORDS AFTER REMOVING THE BLACK LIST DOMAIN RECORDS: 
-
-			/********************* 3.5 INVALID EMAILS SUPPRESION *******************\
-			|              --ALL - REMOVES THE ALL INVALID EMAIL RECORDS                |
-			\***********************************************************************/
-				  
-				 --REMOVES ALL INVALID EMAIL RECORDS
-				  BEGIN 
-					S_DBM.SP_DELETE_INVALID_EMAILS('@TABLE_NAME_STG');
-				  END;
-
-				  --NUMBER OF @TABLE_NAME_STG STAGING TABLE RECORDS AFTER REMOVING THE INVALID EMAIL RECORDS: 
-
-			  
-			/********** 4.0 ISOLATE MASTER CONTROL RECORDS **********\
-			|        INSERT FOLLOWING VARIABLES INTO PROCEDURE       |
-			\********************************************************/
-
-				  --CREATE TEMP STAGING TABLE AND INSERT MASTER CONTROL RECORDS
-				  --(Creates @TABLE_NAME_STG_SPLIT staging table and Inserts the MASTER CONTROL group records into the table)
-				  BEGIN 
-					S_DBM.SP_CREATE_DATA_SPLITS_ND (
-								'@TABLE_NAME_STG'--NAME OF TABLE
-							   ,'@PROGRAMVALUE'      --PROGRAM
-							   ,'@W1'        --WAVE
-							   ,'@CAMPAIGNTYPE'        --TYPE
-							   ,'@CHANNEL'       --CHANNEL
-							   ,'<DRIVER / OTHER>'   --SOURCE TABLE = DRIVER or OTHER (Leave one value)
-							   ,'@DATEVALUE'   --Date ('MMDDYY')
-							   );
-				  END;
-
-				  COMMIT; 
-
-				  -- To Count the number of the MASTER CONTROL group records which have been inserted into @TABLE_NAME_STG_SPLIT staging table
-				  SELECT To_Char(Count(*),'999,999,999') As Count
-					FROM @TABLE_NAME_STG_SPLIT t      
-					WHERE t.controlgroup = 'MASTER CONTROL';
-
-				  -- Number of the inserted MASTER CONTROL records: 
-
-				 
-			/******************* 5.1 AUTOSPLIT CONTROL GROUPS BY VERSION ***************************\
-			|                      THIS IS FOR THE SAME PURPOSE AS 3.2                              |
-			|                           DO NOT USE BOTH                                             |
-			|                      INSERT ALL SUBSETS INTO TEMP STAGING TABLE                       |
-			|             NUMBER OF SUBSETS EQUALS DISTINCT VALUES IN THE VERSION FIELD             |
-			|                   VERSION FIELD MUST BE POPULATED FOR THIS TO WORK                    |
-			\***************************************************************************************/
-
-
-				  -- Creates @TABLE_NAME_STG_SPLTCNTS Counts temporary table
-				  -- Inserts the CONTROL group records into the @TABLE_NAME_STG_SPLIT staging table
-				  BEGIN
-					S_DBM.SP_SPLIT_CONTROLS_ND (
-								 '@TABLE_NAME_STG'--NAME OF TABLE
-								,'@PROGRAMVALUE'      --PROGRAM
-								,'@W1'        --WAVE
-								,'@CAMPAIGNTYPE'        --TYPE
-								,'@CHANNEL'       --CHANNEL
-								,'<ENTER INTEGER VALUE HERE>' --BASE PERCENTAGE Based on the CONTROL percent column of the Matrix (BASE IS CALCULATED AS COUNTS BY A DISTINCT VALUE IN THE VERSION FIELD)
-								,'1 ='      --CONDITION FILED NAME
-								,'1'        --CONDITION FILED VALUE
-								,'@DATEVALUE'   --Date ('MMDDYY')
-								);    --EG: IF A UNIQUE VALUE IN VERSION = 'X' AND 100 RECORDS ARE PRESENT WITH THIS VALUE, 
-									  --THE PROC WILL SELECT THE BY-YOU-PROVIDED PERCENTAGE OF THE 100 RECORDS
-				  END;
-				  
-				  COMMIT; 
-				  
-				  -- To Count the number of the CONTROL group records which have been inserted into @TABLE_NAME_STG_SPLIT staging table
-				 SELECT To_Char(Count(*),'999,999,999') As Count
-				   FROM @TABLE_NAME_STG_SPLIT t      
-				   WHERE t.controlgroup = 'CONTROL';
-
-				 -- Number of the inserted CONTROL records: 
-
-				  
-			/******************************* 5.2 SPLIT TEST GROUPS *********************************\
-			|                 PROC WILL FLAG BATCHES OF RECORDS IN STAGING TABLE                     |
-			|                  CUSTOMIZE ANY OF THE FOLLOWING FIELDS:                                |
-			|                  --PROMOCODE, CPID, VEHICLE, SUBJECTLINE, VERSION, CONTROLGROUP        |
-			|                  --ANY CUSTOM FIELD                                                    |
-			\***************************************************************************************/
-				  
-				  -- SP_SWISS_KNIFE Procedure updates the records of the @TABLE_NAME_STG staging table based on the given conditions
-				  -- (The Procedure picks records which do not exist in @TABLE_NAME_STG_SPLIT Staging table, it means that the procedure 
-				  --  does not pick CONTROL or MASTER CONTROL group records because those two types of the records won't be Spooled)
-				  BEGIN
-					S_DBM.SP_SWISS_KNIFE
-					  (
-					  '@TABLE_NAME_STG'        --TABLE NAME TO BE UPDATED
-					  ,'<ENTER INTEGER VALUE HERE FOR NUMBER OF RECORDS>' --PERCENT OR NUMBER OF RECORDS TO BE ISOLATED
-					  ,'<ENTER INTEGER VALUE HERE FOR NUMBER OF LOOPS>'   --NUMBER OF LOOPS WITH SAME SET OF CONDITIONS (E.G. 3 TEST GROUPS)
-					  ,'<ENTER FIELD NAME HERE>' --FIELD NAME IN STAGING TABLE TO BE UPDATED
-					  ,'1'    --ANY VALUE TO FLAG IN CUSTOM FIELD ABOVE ==> ENTERING 'ATNR' (WITHOUT THE QUOTES WILL INSERT INCREMENTED AUTINUMBER INTO FIELD
-					  ,'1'    --ANY VALUE TO FLAG IN CUSTOM FIELD ABOVE ==> 1 REPRESENTS NOT APPLICABLE
-					  ,'1'    --ANY VALUE TO FLAG IN CUSTOM FIELD ABOVE ==> 1 REPRESENTS NOT APPLICABLE
-					  ,'1'    --ANY VALUE TO FLAG IN CUSTOM FIELD ABOVE ==> 1 REPRESENTS NOT APPLICABLE
-					  ,'1'    --ANY VALUE TO FLAG IN CUSTOM FIELD ABOVE ==> 1 REPRESENTS NOT APPLICABLE
-					  ,'1 =', '1' --CUSTOM FIELD = CUSTOM VALUE ==> E.G. VERSION = ABCD ==> MUST MAINTAIN RELATIONSHIP SIGN, CANNOT SAY VERSION IS NULL, etc.
-					  ,'1 =', '1' --CUSTOM FIELD = CUSTOM VALUE ==> E.G. VERSION = ABCD
-					  ,'1 =', '1' --CUSTOM FIELD = CUSTOM VALUE ==> E.G. VERSION = ABCD
-					  ,'1 =', '1' --CUSTOM FIELD = CUSTOM VALUE ==> E.G. VERSION = ABCD
-					  ,'1 =', '1' --CUSTOM FIELD = CUSTOM VALUE ==> E.G. VERSION = ABCD
-					  );
-				  END;
-
-	 
-				  SELECT T.SUBJECTLINE, To_Char(Count(*),'999,999,999') As Count
-					FROM @TABLE_NAME_STG T
-					WHERE NOT EXISTS (SELECT 1
-										FROM @TABLE_NAME_STG_SPLIT T2
-										WHERE T2.EMAIL_ADDRESS = T.EMAIL_ADDRESS
-									 )
-					GROUP BY T.SUBJECTLINE
-					ORDER BY T.SUBJECTLINE;
-
-				 
-			/******************* 5.3 AUTOSPLIT PROGRAM GROUPS BY VERSION ***************************\
-			|                      THIS IS FOR THE SAME PURPOSE AS 3.1                              |
-			|                           DO NOT USE BOTH                                             |
-			|                      INSERT ALL SUBSETS INTO TEMP STAGING TABLE                       |
-			|             NUMBER OF SUBSETS EQUALS DISTINCT VALUES IN THE VERSION FIELD             |
-			|                   VERSION FIELD MUST BE POPULATED FOR THIS TO WORK                    |
-			\***************************************************************************************/
-				  --IF PROGRAM RECORDS NEED TO BE SPLIT FOR A/B TESTING RUN THE BELOW TWICE BY FOLLOWING THE BELOW STEPS:
-											   --SET PERCENTAGE TO REQUIRED A TEST PERCENTAGE
-											   --COPY PASTE THE PROCEDURE
-											   --SET THE SECOND PERCENTAGE OR LEAVE 100 TO SELECT ALL REMAINING RECORDS                                                                                 
-
-
-				  -- Create the following Global Temporary Table under your Schema (if it does not exist)
-				  Create Global Temporary Table TMP_SPLIT
-				  (
-					Col_1 VARCHAR2(2000),
-					Col_2 VARCHAR2(2000),
-					Col_3 VARCHAR2(2000),
-					Col_4 VARCHAR2(2000),
-					Col_5 VARCHAR2(2000)
-				  )
-				  On Commit Preserve Rows;
-
-
-
-				  --(The Procedure Inserts the PROGRAM group records into the @TABLE_NAME_STG_SPLIT staging table)
-				  BEGIN
-					S_DBM.SP_SPLIT_PROGRAM_ND (
-								 '@TABLE_NAME_STG'--NAME OF TABLE
-								,'@PROGRAMVALUE'    --PROGRAM
-								,'@W1'      --WAVE
-								,'@CAMPAIGNTYPE'      --TYPE
-								,'@CHANNEL'     --CHANNEL
-								,'100'    --BASE PERCENTAGE: 100 TAKES ALL REMAINING CONTACTS
-								,'1 ='    --CONDITION FIELD NAME
-								,'1'      --CONDITION FIELD VALUE
-								,'@DATEVALUE' --Date ('MMDDYY')
-							   );
-				  END;
-
-				  COMMIT; 
-
-				  -- To Count the number of the PROGRAM group records which have been inserted into @TABLE_NAME_STG_SPLIT staging table
-				  SELECT To_Char(Count(*),'999,999,999') As Count
-					FROM @TABLE_NAME_STG_SPLIT T      
-					WHERE T.controlgroup = 'PROGRAM';
-
-				  -- Number of the inserted PROGRAM records: 
-
-
-				  SELECT To_Char(Count(*),'999,999,999') As Count FROM @TABLE_NAME_STG;
-				  
-				  -- Total Number of the @TABLE_NAME_STG records: 
-
-				  
-				  SELECT To_Char(Count(*),'999,999,999') As Count FROM @TABLE_NAME_STG_SPLIT;
-				  
-				  -- Total Number of the @TABLE_NAME_STG_SPLIT records: 
-				  
-				  -- (The Total Number of the records at the both staging tables should be equal)
-
-				  
-			/***************** 6.0 ORDER FULFILLMENT ***************\
-			| THIS WILL CREATE THE FINAL TABLE IN YOUR DB           |
-			| AND POPULATE ALL RECORDS IN THE CAMPAIGN_HISTORY      |
-			| TABLE                                                 |
-			\*******************************************************/
-
-				  -- To take a look at the generated Campaign_Codes, Cell_Codes and ControlGroups before creating the Final Table
-				  SELECT Campaign_Code, Cell_Code, RPAD(ControlGroup,16) As ControlGroup, TO_CHAR(COUNT(*),'999,999,999') As Count
-					FROM @TABLE_NAME_STG_SPLIT
-					GROUP BY Campaign_Code, Cell_Code, ControlGroup
-					ORDER BY Campaign_Code, 
-							 SUBSTR(Cell_Code,1,3)||SUBSTR(Cell_Code,6), 
-							 DECODE(TRIM(ControlGroup),'PROGRAM',1,'CONTROL',2,'MASTER CONTROL',3);
-	/*
-	CAMPAIGN_CODE         CELL_CODE             CONTROLGROUP    COUNT(*)
-	--------------------  --------------------  --------------  --------
-	*/
-			
-
-
-				  --RAN STEPS 5.0
-				  --The Procedure creates @FILETYPE_@PROGRAMVALUE_@REGIONVALUE_@COUNTRYCODE_@LANGUAGECODE_@DATEVALUE_F Final Data Table
-				  --The Procedure moves the all groups (Master_Control, Control, Program) data to the Final Data Table
-				  BEGIN
-					S_DBM.SP_ORDER_FULFILLMENT_ET_EMAIL (
-							 '@TABLE_NAME_STG'
-							,'@FILETYPE'    --File Type (DTC / B2B / DIG)
-							,'@PROGRAMVALUE'    --Internal campaign name or 3 character code
-							,''       --Optional Distinguisher, 0 to 3 characters (e.g. 'APP' for App World, 'M16' for Defending the Base Month 16)
-							,'@REGIONVALUE'     --Region: NA/ EU or MU (for multiple Regions)
-							,'@COUNTRYCODE'     --Country Code: US, CA, UK or MU for multiple
-							,'@LANGUAGECODE'     --Language Code: EN, FR or MU for multiple
-							,'@DATEVALUE' --Deployment Date ('MMDDYY')
-							,'@STARTDATEVALUE' --Campaign Start Date ('MMDDYY')
-						   );
-				  End;
-
-
-				  BEGIN
-					-- Insert Two records to the Final Data Table (@FILETYPE_@PROGRAMVALUE_@REGIONVALUE_@COUNTRYCODE_@LANGUAGECODE_@DATEVALUE_F)
-					-- (One record for cici@blackberry.com email address and another record for rim@proximity email address)
-					-- The rest of the inserted Two records' fields are picked randomly from the other existing records
-					-- Record I:
-					Insert Into @FILETYPE_@PROGRAMVALUE_@REGIONVALUE_@COUNTRYCODE_@LANGUAGECODE_@DATEVALUE_F F
-					  Select A_CRM.CRM_ENCRYPTION_PKG.ENCRYPT_EMAIL('cici@blackberry.com') As CRM_GLB_CUST_ID,
-							 A_CRM.CRM_ENCRYPTION_PKG.ENCRYPT_EMAIL('cici@blackberry.com') As CRM_E_EMAIL,
-							 F2.FIRSTNAME, F2.LASTNAME, F2.CAMPAIGN_CODE, F2.CELL_CODE, F2.WAVE, F2.PROMO_CODE, F2.CPID, F2.REGION,
-							 F2.COUNTRY, F2.COUNTRY_CODE, F2.LANGUAGE, F2.SEGMENT, F2.AUDIENCE, F2.DEVICE_CATEGORY, F2.DEVICE_DETAIL,
-							 F2.MARKETING_NAME, F2.SL_MARKETING_NAME, F2.CUST_TENURE, F2.DEVICE_TENURE, F2.CARRIER, F2.SAP_SOLD_TO,
-							 F2.OS, F2.MESSAGE_TYPE, F2.PERMISSION_TYPE, F2.INDUSTRY, F2.VERTICAL, F2.VEHICLE, F2.JOBROLE, F2.DEPARTMENT,
-							 F2.SUBJECTLINE, F2.VERSION, F2.CUSTOM1, F2.CUSTOM2, F2.CUSTOM3, F2.CUSTOM4, F2.CUSTOM5, F2.CUSTOM6,
-							 F2.CUSTOM7, F2.CUSTOM8, F2.CUSTOM9, F2.CUSTOM10, F2.CUSTOM11, F2.CUSTOM12, F2.CUSTOM13, F2.CUSTOM14,
-							 F2.CUSTOM15, F2.CUSTOM16, F2.CUSTOM17, F2.CUSTOM18, F2.CUSTOM19, F2.CUSTOM20, F2.CONTROL_GROUP,
-							 F2.CRM_E_DEVICE_ID, F2.CRM_E_ECOID, F2.HIERARCHY_DT, F2.UPLOADED, F2.UPLOADEDBY, F2.DEPLOYMENT_DATE,
-							 F2.LIST_DELIVERED_DATE, F2.CAMPAIGN_START_DATE
-						From @FILETYPE_@PROGRAMVALUE_@REGIONVALUE_@COUNTRYCODE_@LANGUAGECODE_@DATEVALUE_F F2
-						Where RowNum < 2;
-					-- Record II:
-					Insert Into @FILETYPE_@PROGRAMVALUE_@REGIONVALUE_@COUNTRYCODE_@LANGUAGECODE_@DATEVALUE_F F
-					  Select A_CRM.CRM_ENCRYPTION_PKG.ENCRYPT_EMAIL('rim@proximity.ca') As CRM_GLB_CUST_ID,
-							 A_CRM.CRM_ENCRYPTION_PKG.ENCRYPT_EMAIL('rim@proximity.ca') As CRM_E_EMAIL,
-							 F2.FIRSTNAME, F2.LASTNAME, F2.CAMPAIGN_CODE, F2.CELL_CODE, F2.WAVE, F2.PROMO_CODE, F2.CPID, F2.REGION,
-							 F2.COUNTRY, F2.COUNTRY_CODE, F2.LANGUAGE, F2.SEGMENT, F2.AUDIENCE, F2.DEVICE_CATEGORY, F2.DEVICE_DETAIL,
-							 F2.MARKETING_NAME, F2.SL_MARKETING_NAME, F2.CUST_TENURE, F2.DEVICE_TENURE, F2.CARRIER, F2.SAP_SOLD_TO,
-							 F2.OS, F2.MESSAGE_TYPE, F2.PERMISSION_TYPE, F2.INDUSTRY, F2.VERTICAL, F2.VEHICLE, F2.JOBROLE, F2.DEPARTMENT,
-							 F2.SUBJECTLINE, F2.VERSION, F2.CUSTOM1, F2.CUSTOM2, F2.CUSTOM3, F2.CUSTOM4, F2.CUSTOM5, F2.CUSTOM6,
-							 F2.CUSTOM7, F2.CUSTOM8, F2.CUSTOM9, F2.CUSTOM10, F2.CUSTOM11, F2.CUSTOM12, F2.CUSTOM13, F2.CUSTOM14,
-							 F2.CUSTOM15, F2.CUSTOM16, F2.CUSTOM17, F2.CUSTOM18, F2.CUSTOM19, F2.CUSTOM20, F2.CONTROL_GROUP,
-							 F2.CRM_E_DEVICE_ID, F2.CRM_E_ECOID, F2.HIERARCHY_DT, F2.UPLOADED, F2.UPLOADEDBY, F2.DEPLOYMENT_DATE,
-							 F2.LIST_DELIVERED_DATE, F2.CAMPAIGN_START_DATE
-						From @FILETYPE_@PROGRAMVALUE_@REGIONVALUE_@COUNTRYCODE_@LANGUAGECODE_@DATEVALUE_F F2
-						Where RowNum < 2;
-					Commit;
-				  END;
-
-				  SELECT To_Char(Count(*),'999,999,999') As Count FROM @FILETYPE_@PROGRAMVALUE_@REGIONVALUE_@COUNTRYCODE_@LANGUAGECODE_@DATEVALUE_F;
-				  
-				  -- Total Number of the @FILETYPE_@PROGRAMVALUE_@REGIONVALUE_@COUNTRYCODE_@LANGUAGECODE_@DATEVALUE_F records: 
-
-
-			/***** 6.5 LOG THE MISSING CRM CUSTOMERS TO A TABLE ****\
-			|  THE LOG TABLE IS:                                    |
-			|  A_CRM.ADHOC_CRM_GLOBAL_CUSTOMER                      |
-			\*******************************************************/
-
-				 --LOG THE MISSING CRM CUSTOMERS TO A_CRM.ADHOC_CRM_GLOBAL_CUSTOMER TABLE (BY USING THE CAMPAIGN FINAL TABLE)
-				  BEGIN 
-					S_DBM.SP_LOG_MISSING_CRM_CUSTOMERS('@FILETYPE_@PROGRAMVALUE_@REGIONVALUE_@COUNTRYCODE_@LANGUAGECODE_@DATEVALUE_F');
-				  END;
-
-			/******************** 7.0 SPOOL TABLE ******************\
-			|  Copy the FINAL DATA TABLE(s) from current Schema to  |
-			|  the S_DBM Schema to be Picked and be Spooled.        |
-			\*******************************************************/
-
-				  -- Insert a new Campaign reocrd with minimum info to APEX_CUSTINFO.DMD_FORM_TABLE Table
-				  INSERT INTO APEX_CUSTINFO.DMD_FORM_TABLE DMD
-					(DMD.RC_NAME,
-					 DMD.MARKETING_CHANNEL,
-					 DMD.CAMPAIGN_NAME,
-					 DMD.EXTRA_COLUMNS_AT_CONFIRM_EMAIL
-					)
-					VALUES
-					(USER,
-					 'Email',
-					 'type the campaign name here',
-					 Null  -- Additinal Columns at the main query of the Campaign Confirmation Email. Format: 'Title1,Field1,Title2,Field2,...' (Note: Optional Column) 
-					);
-
-				  --The Spooling routine
-				  BEGIN
-					-- Move the Campaign Data Files into S_DBM Schema (to be picked and spooled by the Automatic Spooling Job)
-					S_DBM.SP_CREATE_SPOOLING_DATA_ET
-					  ('', -- Main Data Table Name, which is used for the Reporting and Email generation purposes (Table Name Format: Main_..._F) (Note: Pass NULL if the Number of Final Data Tables is One)
-					   '', -- Campaign Name (Note: Campaign Name should exists in the Campaigns Table: Apex_CustInfo.DMD_Form_Table)
-					   '', -- Final Data Tables Name: 'Final_Data_Table1_Name | Final_Data_Table2_Name | ...'
-					   '', -- Final Spooling Files Name: 'Final_Spooling_File1_Name | Final_Spooling_File2_Name | ...' (Note: Do not add ".csv" to the name of the Spooling Files)
-					   '', -- Spooling Files Description: 'Final_Spooling_File1_Desc | Final_Spooling_File2_Desc | ...' (Note: Optional Parameter)
-					   ''  -- Fields Redirection Info: 'DefaultField1 > ReplacingField1 | DefaultField2 > ReplacingField2 | ...' (Note: Optional Parameter) (Note: The Field Redirecting will be done for the all Final Data Tables)
-					  );
-				  END;
-
-				  /*
-				  --The Undo Spooling routine
-				  BEGIN
-					-- Remove the Ready to Spool Campaign Data Tables from S_DBM Schema (to prevent the Tables from being picked and spooled by the Automatic Spooling Job)
-					S_DBM.SP_UNDO_SPOOLING_DATA_ET
-					  ('' -- Campaign Name
-					  );
-				  END;
-
-				  -- Run the following Query to check if the Campaign Info exists in APEX_CUSTINFO.DMD_FORM_TABLE and APEX_CUSTINFO.DMD_FORM_TABLE_SPOOLING_INFO tables
-				  SELECT DMD.CAMPAIGN_NAME,
-						 DMD_SI.FINAL_DATA_TABLE_NAME,
-						 DMD_SI.FINAL_SPOOLING_FILE_NAME
-					FROM APEX_CUSTINFO.DMD_FORM_TABLE DMD
-					INNER JOIN APEX_CUSTINFO.DMD_FORM_TABLE_SPOOLING_INFO DMD_SI
-					ON DMD_SI.DMD_REQUEST_CODE = DMD.DMD_REQUEST_CODE
-					WHERE UPPER(DMD_SI.FINAL_DATA_TABLE_NAME = UPPER('type the data table name here');
-
-				  -- Run the following Query to check if the Campaign Info exists in APEX_CUSTINFO.DMD_FORM_TABLE table
-				  SELECT DMD.*
-					FROM APEX_CUSTINFO.DMD_FORM_TABLE DMD
-					WHERE UPPER(DMD.CAMPAIGN_NAME) = UPPER('type the campaign name here');
-				  */
-
-
-
-			/*********************** 9.0 CLEAN UP *******************\
-			|                DELETE FOLLOWING TABLES                 |
-			|                 - WORKING TABLE                        |
-			|                 - STAGING TABLE                        |
-			|                 - AUDIT TABLE                          |
-			\*******************************************************/
-
-			--!NOTE: MAKE SURE TO BACK UP YOUR QUERIES BEFORE DROPPING WORKING TABLES
-			BEGIN
-			  S_DBM.SP_DROP_WORKFILE ('@TABLE_NAME_STG');
-			END;
-
-			COMMIT; 
-
-
-	/*
-	--ADJUST DATE FORMAT IN CSV FILE TO MMDDYYYY
-	set pagesize 0;
-	set newpage none;
-	set linesize 500;
-	set heading off;
-	set feedback off;
-	set underline off;
-	set define off;
-	set termout off;
-	set trimspool on; --FILE NAME BELOW MUST BE ALL CAPS EXCEPT FOR .csv!!!
-	SPOOL C:\@FILETYPE_@PROGRAMVALUE_@REGIONVALUE_@COUNTRYCODE_@LANGUAGECODE_@DATEVALUE_FINAL.csv;
-	SELECT ''||'CUSTOMERID'||''||'|'||''||'EMAIL_ADDRESS'||''||'|'||''||'FIRSTNAME'||''||'|'||''||'LASTNAME'||''||'|'||''||'CAMPAIGN_CODE'||''||'|'||
-		   ''||'CELL_CODE'||''||'|'||''||'PROMO_CODE'||''||'|'||''||'CPID'||''||'|'||''||'COUNTRY'||''||'|'||''||'LANGUAGE'||''||'|'||
-		   ''||'SEGMENT'||''||'|'||''||'AUDIENCE'||''||'|'||''||'JOBROLE'||''||'|'||''||'DEPARTMENT'||''||'|'||''||'DEVICE_CATEGORY'||''||'|'||
-		   ''||'DEVICE_DETAIL'||''||'|'||''||'CUST_TENURE'||''||'|'||''||'DEVICE_TENURE'||''||'|'||''||'CARRIER'||''||'|'||''||'OS'||''||'|'||
-		   ''||'MESSAGETYPE'||''||'|'||''||'PERMISSIONTYPE'||''||'|'||''||'INDUSTRY'||''||'|'||''||'VERTICAL'||''||'|'||''||'VEHICLE'||''||'|'||
-		   ''||'SUBJECTLINE'||''||'|'||''||'VERSION'||''||'|'||''||'CUSTOM1'||''||'|'||''||'CUSTOM2'||''||'|'||''||'CUSTOM3'||''||'|'||
-		   ''||'CUSTOM4'||''||'|'||''||'CUSTOM5'||''||'|'||''||'CUSTOM6'||''||'|'||''||'CUSTOM7'||''||'|'||''||'CUSTOM8'||''||'|'||''||'CUSTOM9'||''||'|'||
-		   ''||'CUSTOM10'||'' FROM DUAL;
-	SELECT  ''||CUSTOMERID||''||'|'||''|| r_mask.Encryption_Pkg.Decrypt(EMAIL_ADDRESS)||''||'|'||''||FIRSTNAME||''||'|'||''||LASTNAME||''||'|'||''||CAMPAIGN_CODE||''||'|'||
-		   ''||CELL_CODE||''||'|'||''||PROMO_CODE||''||'|'||''||CPID||''||'|'||''||COUNTRY||''||'|'||''||LANGUAGE||''||'|'||
-		   ''||SEGMENT||''||'|'||''||AUDIENCE||''||'|'||''||JOBROLE||''||'|'||''||DEPARTMENT||''||'|'||''||DEVICE_CATEGORY||''||'|'||
-		   ''||DEVICE_DETAIL||''||'|'||''||CUST_TENURE||''||'|'||''||DEVICE_TENURE||''||'|'||''||CARRIER||''||'|'||''||OS||''||'|'||
-		   ''||MESSAGETYPE||''||'|'||''||PERMISSIONTYPE||''||'|'||''||INDUSTRY||''||'|'||''||VERTICAL||''||'|'||''||VEHICLE||''||'|'||
-		   ''||SUBJECTLINE||''||'|'||''||VERSION||''||'|'||''||CUSTOM1||''||'|'||''||CUSTOM2||''||'|'||''||CUSTOM3||''||'|'||
-		   ''||CUSTOM4||''||'|'||''||CUSTOM5||''||'|'||''||CUSTOM6||''||'|'||''||CUSTOM7||''||'|'||''||TO_CHAR(CUSTOM8,'YYYY-MM-DD HH24:MI:SS')||''||'|'||''||CUSTOM9||''||'|'||
-		   ''||CUSTOM10||''
-	FROM @FILETYPE_@PROGRAMVALUE_@REGIONVALUE_@COUNTRYCODE_@LANGUAGECODE_@DATEVALUE_F ;
-	SPOOL OFF;
-	*/
-
-	-------------------------------------------------------------------------------------------------------------------------------------------------------------
-	--END OF TEMPLATE -- END OF TEMPLATE -- END OF TEMPLATE -- END OF TEMPLATE -- END OF TEMPLATE -- END OF TEMPLATE -- END OF TEMPLATE -- END OF TEMPLATE
-	-------------------------------------------------------------------------------------------------------------------------------------------------------------
-
+	insert /*+ APPEND */ into ${1:tab} ${2:alias}
+	select /*+ PARALLEL(${4:alias2}, 64) */
+	       *
+	  from ${3:tab2} $4
+	;
+
+snippet stpl
+	%s/@TABLE_NAME/${1}/g | 
+	%s/@FILETYPE/${2}/g | 
+	%s/@PROGRAMVALUE/${3}/g | 
+	%s/@W1/${4}/g | 
+	%s/@CAMPAIGNTYPE/${5}/g | 
+	%s/@CHANNEL/${6}/g | 
+	%s/@REGIONVALUE/${7}/g | 
+	%s/@COUNTRYCODE/${8}/g | 
+	%s/@LANGUAGECODE/${9}/g | 
+	%s/@DATEVALUE/\=strftime("%m%d%y")/g | 
+	%s/@STARTDATEVALUE/\=strftime("%m%d%y")/g
+
+snippet sdbmlutab
+	select /*+ PARALLEL(rc,32) */
+		  *
+	from s_dbm.lookup_region_countries rc
+	where lower(country) = '${1:COUNTRY_NAME}'
+	;
+
+
+	select /*+ PARALLEL(lv,32) */
+		  *
+	from s_dbm.lookup_country_language_values lv
+	where lower(country_name) = '$1'
+	  or lower(country_code) = '${2:COUNTRY_CODE}'
+	;
+
+	select /*+ PARALLEL(cc,32) */
+		  *
+	from s_dbm.lookup_country_codes cc
+	where lower(country_name) = '$1'
+	  -- or lower(country_code) = '$2'
+	  -- or lower(country_region) = ''
+	;
+snippet ldwifi
+	sap_sold_to not in ('0000348529', '0000348526', '0000348528')
+snippet npslog
+	select /*+ parallel(l32) */ 
+		  campaign_description
+		 ,campaign_month
+		 ,campaign_step_description
+		 ,campaign_step_sequence
+		 ,number_of_records
+		 ,step_start_time
+		 ,step_completion_time
+		 ,modified_by
+		 ,comments
+	from s_dbm.campaign_steps_log
+	where step_start_time >= trunc(sysdate)-1
+	   and campaign_description in (
+		'NPS (Net Promoter Score) BBM Campaign'   --BBM
+	   ,'NPS (Net Promoter Score) BB10 Campaign'  --BB10
+	   ,'NPS (Net Promoter Score) BBOS Campaign'  --BBOS
+	   ,'GRS (Global Repaire Service) Survey Campaign' --GRS
+	   )
+	order by step_start_time desc
+snippet chrtm
+	unistr('\2122')
+snippet chrreg
+	unistr('\00AE')
+snippet devunmap
+	select * from (
+	  select count(*) as cnt
+			,device_type
+			,os_family 
+	   from s_pprov.glb_devices 
+	  where date_created >= to_date('1/30/2013', 'MM/DD/YYYY') 
+		and status=11 
+		and dev_app_ver like '10.%' 
+		and os_family='QNX'
+		and device_type not in (select device_type from s_pprov.device_mapping)
+	  group by device_type, os_family
+	)
+	order by cnt desc;
+snippet forcespool
+	  BEGIN
+		S_DBM.PACK_SPOOLING_FILES.Proc_Main;
+	  END;
+snippet mypin
+	2FFF6F93
+snippet myecoid
+	AZrOjiC42Pq721ARBmQQB5s=
+snippet exists
+	exists
+	(
+	  select /*+ parallel($2,32) */
+			1
+	  from ${1:table_name} ${2:alias1}
+	where $2.${3:field_name} = ${4:alias2}.$3
+	)
+snippet spooldefuck
+	delete
+	--select *
+	from APEX_CUSTINFO.DMD_FORM_TABLE DMD
+	where campaign_name =  'NPS BB10 Campaign - ' || '${1:Full Month Proper Case}' || ' ' || '${2:DD, YYYY}' 
+
+	delete
+	--select *
+	from apex_custinfo.dmd_form_table_spooling_info
+	where dmd_request_code = 
+	(
+	  select dmd_request_code
+	  from APEX_CUSTINFO.DMD_FORM_TABLE DMD
+	  where campaign_name =  'NPS BB10 Campaign - ' || '$1' || ' ' || '$2' 
+	)
+
+
+	drop table DCC_SUR_NPS_MU_MU_MU_121914_01;
+	drop table DCC_SUR_NPS_MU_MU_MU_121914_02;
+	drop table MAIN_SUR_NPS_MU_MU_MU_121914_F;
+	drop table S_DBM.MAIN_SUR_NPS_MU_MU_MU_121914_F;
